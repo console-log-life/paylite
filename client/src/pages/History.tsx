@@ -58,6 +58,19 @@ export default function History() {
     }
   };
 
+  // Re-label a payment. Updates the row straight away, and puts it back if
+  // the server refuses.
+  const changeCategory = async (item: HistoryItem, category: string) => {
+    const previous = item.category;
+    setItems((rows) => rows.map((r) => (r.id === item.id ? { ...r, category } : r)));
+    try {
+      await api.setCategory(item.id, category);
+    } catch (err) {
+      setItems((rows) => rows.map((r) => (r.id === item.id ? { ...r, category: previous } : r)));
+      setError(err instanceof ApiError ? err.message : 'Could not change the category');
+    }
+  };
+
   const download = async () => {
     setDownloading(true);
     setError('');
@@ -107,7 +120,7 @@ export default function History() {
         {loading && items.length === 0 ? (
           <p className="py-8 text-center text-sm text-slate-500">Loading…</p>
         ) : (
-          <ActivityList items={items} showBalance />
+          <ActivityList items={items} showBalance onCategoryChange={changeCategory} />
         )}
       </div>
 

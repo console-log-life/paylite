@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react';
+import { lazy, Suspense, type ReactElement } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
@@ -10,6 +10,16 @@ import Requests from './pages/Requests';
 import AddMoney from './pages/AddMoney';
 import History from './pages/History';
 import Settings from './pages/Settings';
+import MyQr from './pages/MyQr';
+
+// Charts and the camera scanner are big libraries, so these pages load only
+// when opened.
+const Insights = lazy(() => import('./pages/Insights'));
+const ScanPay = lazy(() => import('./pages/ScanPay'));
+
+const page = (el: ReactElement) => (
+  <Suspense fallback={<p className="py-10 text-center text-slate-500">Loading…</p>}>{el}</Suspense>
+);
 
 function RequireAuth({ children }: { children: ReactElement }) {
   const { user, loading } = useAuth();
@@ -38,6 +48,9 @@ export default function App() {
             <Route path="add-money" element={<AddMoney />} />
             <Route path="history" element={<History />} />
             <Route path="settings" element={<Settings />} />
+            <Route path="insights" element={page(<Insights />)} />
+            <Route path="qr" element={<MyQr />} />
+            <Route path="scan" element={page(<ScanPay />)} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

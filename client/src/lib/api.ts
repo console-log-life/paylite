@@ -1,4 +1,4 @@
-import type { HistoryItem, LedgerCheck, PaymentRequest, Receipt, User, Wallet } from './types';
+import type { HistoryItem, Insights, LedgerCheck, PaymentRequest, Receipt, TopupOrder, User, Wallet } from './types';
 
 const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/$/, '');
 const TOKEN_KEY = 'paylite-token';
@@ -67,6 +67,7 @@ async function call<T>(path: string, { method = 'GET', body, idempotencyKey }: O
     throw new ApiError(0, 'NETWORK', 'Cannot reach PayLite. Check your connection.');
   }
 
+  if (res.status === 204) return undefined as T;
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const { code = 'ERROR', message = 'Something went wrong', ...extra } = data.error || {};
@@ -104,10 +105,25 @@ export const api = {
   wallet: () => call<Wallet>('/api/wallet'),
   verifyLedger: () => call<LedgerCheck>('/api/wallet/verify'),
   topup: (amount: string) => moneyCall<Receipt>('/api/wallet/topup', { amount }),
+  topupOrder: (amount: string) => call<TopupOrder>('/api/wallet/topup/order', { method: 'POST', body: { amount } }),
+  topupVerify: (body: { orderId: string; paymentId: string; signature: string }) =>
+    call<Receipt>('/api/wallet/topup/verify', { method: 'POST', body }),
 
   lookup: (to: string) =>
     call<{ name: string; handle: string; isSelf: boolean }>(`/api/transfers/lookup?to=${encodeURIComponent(to)}`),
-  transfer: (body: { to: string; amount: string; note: string; pin: string }) => moneyCall<Receipt>('/api/transfers', body),
+  transfer: (body: { to: string; amount: string; note: string; pin: string; category: string }) =>
+    moneyCall<Receipt>('/api/transfers', body),
+  suggestCategory: (to: string, note: string) =>
+    call<{ category: string; source: 'note' | 'history' | 'default' }>(
+      `/api/transfers/suggest-category?to=${encodeURIComponent(to)}&note=${encodeURIComponent(note)}`,
+    ),
+  setCategory: (entryId: string, category: string) =>
+    call<{ id: string; category: string }>(`/api/transactions/${entryId}/category`, { method: 'PATCH', body: { category } }),
+
+  insights: (month: string) => call<Insights>(`/api/insights?month=${month}`),
+  saveBudget: (body: { category: string; month: string; amount: string }) =>
+    call<{ budget: { id: string } }>('/api/insights/budgets', { method: 'PUT', body }),
+  deleteBudget: (id: string) => call<void>(`/api/insights/budgets/${id}`, { method: 'DELETE' }),
 
   requests: (box: 'incoming' | 'outgoing') => call<{ items: PaymentRequest[] }>(`/api/requests?box=${box}`),
   createRequest: (body: { from: string; amount: string; note: string }) =>

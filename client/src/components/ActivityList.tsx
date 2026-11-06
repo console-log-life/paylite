@@ -1,5 +1,5 @@
 import { ArrowDownLeft, ArrowUpRight, Landmark } from 'lucide-react';
-import type { HistoryItem } from '../lib/types';
+import { CATEGORY_ICONS, EXPENSE_CATEGORIES, type HistoryItem } from '../lib/types';
 import { formatDateTime, formatINR, initials } from '../lib/format';
 
 function Avatar({ item }: { item: HistoryItem }) {
@@ -17,7 +17,14 @@ function Avatar({ item }: { item: HistoryItem }) {
   );
 }
 
-export default function ActivityList({ items, showBalance = false }: { items: HistoryItem[]; showBalance?: boolean }) {
+interface ActivityListProps {
+  items: HistoryItem[];
+  showBalance?: boolean;
+  // When given, payments you made get a category dropdown.
+  onCategoryChange?: (item: HistoryItem, category: string) => void;
+}
+
+export default function ActivityList({ items, showBalance = false, onCategoryChange }: ActivityListProps) {
   if (items.length === 0) {
     return <p className="py-8 text-center text-sm text-slate-500">No transactions yet.</p>;
   }
@@ -27,7 +34,7 @@ export default function ActivityList({ items, showBalance = false }: { items: Hi
       {items.map((item) => {
         const sent = item.direction === 'sent';
         const label =
-          item.type === 'topup' ? 'Added from bank' : sent ? `Paid to ${item.counterparty.name}` : `Received from ${item.counterparty.name}`;
+          item.type === 'topup' ? 'Added money' : sent ? `Paid to ${item.counterparty.name}` : `Received from ${item.counterparty.name}`;
         return (
           <li key={item.id} className="flex items-center gap-3 py-3">
             <Avatar item={item} />
@@ -38,7 +45,29 @@ export default function ActivityList({ items, showBalance = false }: { items: Hi
                 {item.note && ` · ${item.note}`}
                 {item.type === 'request_payment' && ' · request'}
               </p>
-              <p className="font-mono text-[11px] text-slate-400">{item.reference}</p>
+              <div className="mt-0.5 flex items-center gap-2">
+                {sent && onCategoryChange ? (
+                  <select
+                    aria-label="Category"
+                    value={item.category || 'Other'}
+                    onChange={(e) => onCategoryChange(item, e.target.value)}
+                    className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600"
+                  >
+                    {EXPENSE_CATEGORIES.map((c) => (
+                      <option key={c} value={c}>
+                        {CATEGORY_ICONS[c]} {c}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  item.category && (
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
+                      {CATEGORY_ICONS[item.category] ?? ''} {item.category}
+                    </span>
+                  )
+                )}
+                <span className="font-mono text-[11px] text-slate-400">{item.reference}</span>
+              </div>
             </div>
             <div className="text-right">
               <p className={`flex items-center justify-end gap-1 font-semibold ${sent ? 'text-slate-900' : 'text-emerald-600'}`}>

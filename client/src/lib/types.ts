@@ -15,6 +15,7 @@ export interface Counterparty {
 
 export interface Wallet {
   balancePaise: number;
+  topupMode: 'razorpay' | 'demo';
   limits: {
     maxTransferPaise: number;
     dailySendPaise: number;
@@ -34,6 +35,7 @@ export interface Receipt {
     note: string;
     createdAt: string;
     counterparty: Counterparty;
+    category: string | null;
   };
   balancePaise: number;
 }
@@ -47,6 +49,7 @@ export interface HistoryItem {
   amountPaise: number;
   balanceAfterPaise: number;
   note: string;
+  category: string | null;
   createdAt: string;
   counterparty: Counterparty;
 }
@@ -68,3 +71,69 @@ export interface LedgerCheck {
   entries: number;
   matches: boolean;
 }
+
+export type BudgetStatus = 'ok' | 'warning' | 'exceeded';
+
+export interface Budget {
+  id: string;
+  category: string;
+  month: string;
+  amountPaise: number;
+  spentPaise: number;
+  remainingPaise: number;
+  percentUsed: number;
+  status: BudgetStatus;
+}
+
+export interface Insights {
+  month: string;
+  spentPaise: number;
+  receivedPaise: number;
+  spentChangePercent: number | null;
+  byCategory: { category: string; totalPaise: number; count: number }[];
+  trend: { month: string; spentPaise: number; receivedPaise: number }[];
+  topPayees: { name: string; handle: string | null; totalPaise: number; count: number }[];
+  budgets: Budget[];
+  alerts: Budget[];
+}
+
+export interface TopupOrder {
+  orderId: string;
+  amountPaise: number;
+  currency: 'INR';
+  keyId: string;
+  prefill: { name: string; email: string };
+}
+
+// Must match server/src/lib/categories.js
+export const EXPENSE_CATEGORIES = [
+  'Food & Dining',
+  'Groceries',
+  'Shopping',
+  'Travel',
+  'Transport',
+  'Bills & Utilities',
+  'Rent',
+  'Entertainment',
+  'Health',
+  'Education',
+  'Friends & Family',
+  'Other',
+] as const;
+
+export const CATEGORY_ICONS: Record<string, string> = {
+  'Food & Dining': '🍽️',
+  Groceries: '🛒',
+  Shopping: '🛍️',
+  Travel: '✈️',
+  Transport: '🚕',
+  'Bills & Utilities': '💡',
+  Rent: '🏠',
+  Entertainment: '🎬',
+  Health: '🩺',
+  Education: '📚',
+  'Friends & Family': '👪',
+  Other: '📦',
+  Income: '💰',
+  'Wallet top-up': '🏦',
+};

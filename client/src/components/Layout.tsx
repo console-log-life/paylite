@@ -1,13 +1,23 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { Home, Send, Inbox, History, Settings, LogOut } from 'lucide-react';
+import { Home, Send, Inbox, History, Settings, LogOut, PieChart, ScanLine } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 const links = [
   { to: '/', label: 'Home', icon: Home, end: true },
   { to: '/send', label: 'Send', icon: Send },
+  { to: '/insights', label: 'Insights', icon: PieChart },
   { to: '/requests', label: 'Requests', icon: Inbox },
   { to: '/history', label: 'History', icon: History },
   { to: '/settings', label: 'Settings', icon: Settings },
+];
+
+// Phones get a 5-tab bar; Settings moves to the header icon.
+const mobileLinks = [
+  { to: '/', label: 'Home', icon: Home, end: true },
+  { to: '/scan', label: 'Scan', icon: ScanLine },
+  { to: '/insights', label: 'Insights', icon: PieChart },
+  { to: '/requests', label: 'Requests', icon: Inbox },
+  { to: '/history', label: 'History', icon: History },
 ];
 
 export default function Layout() {
@@ -40,6 +50,9 @@ export default function Layout() {
           </nav>
           <div className="flex items-center gap-3">
             <span className="hidden text-sm text-slate-500 sm:block">{user?.handle}</span>
+            <NavLink to="/settings" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 md:hidden" aria-label="Settings">
+              <Settings className="h-4 w-4" />
+            </NavLink>
             <button onClick={logout} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100" aria-label="Log out" title="Log out">
               <LogOut className="h-4 w-4" />
             </button>
@@ -53,7 +66,7 @@ export default function Layout() {
 
       {/* Bottom tab bar on phones */}
       <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-slate-200 bg-white md:hidden">
-        {links.map(({ to, label, icon: Icon, end }) => (
+        {mobileLinks.map(({ to, label, icon: Icon, end }) => (
           <NavLink
             key={to}
             to={to}

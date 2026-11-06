@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Eye, EyeOff, Send, HandCoins, PlusCircle, Copy, Check } from 'lucide-react';
+import { Eye, EyeOff, Send, HandCoins, PlusCircle, Copy, Check, ScanLine, QrCode, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api, ApiError } from '../lib/api';
-import type { HistoryItem, PaymentRequest, Wallet } from '../lib/types';
-import { formatINR } from '../lib/format';
+import { CATEGORY_ICONS, type Budget, type HistoryItem, type PaymentRequest, type Wallet } from '../lib/types';
+import { formatINR, todayLocal } from '../lib/format';
 import ActivityList from '../components/ActivityList';
 
 export default function Home() {
@@ -12,16 +12,23 @@ export default function Home() {
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [recent, setRecent] = useState<HistoryItem[]>([]);
   const [incoming, setIncoming] = useState<PaymentRequest[]>([]);
+  const [alerts, setAlerts] = useState<Budget[]>([]);
   const [showBalance, setShowBalance] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
     try {
-      const [w, h, r] = await Promise.all([api.wallet(), api.history({ limit: 5 }), api.requests('incoming')]);
+      const [w, h, r, ins] = await Promise.all([
+        api.wallet(),
+        api.history({ limit: 5 }),
+        api.requests('incoming'),
+        api.insights(todayLocal().slice(0, 7)),
+      ]);
       setWallet(w);
       setRecent(h.items);
       setIncoming(r.items.filter((x) => x.status === 'pending'));
+      setAlerts(ins.alerts);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not load your wallet');
     }
@@ -51,10 +58,15 @@ export default function Home() {
         <div className="rounded-2xl bg-gradient-to-br from-brand-600 to-brand-900 p-6 text-white shadow-lg md:col-span-2">
           <div className="flex items-center justify-between">
             <p className="text-sm text-brand-100">Hi {user?.name.split(' ')[0]}, your balance</p>
-            <button onClick={copyId} className="flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs hover:bg-white/20">
-              {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-              {user?.handle}
-            </button>
+            <div className="flex items-center gap-2">
+              <button onClick={copyId} className="flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs hover:bg-white/20">
+                {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                {user?.handle}
+              </button>
+              <Link to="/qr" className="rounded-full bg-white/10 p-1.5 hover:bg-white/20" aria-label="My QR code" title="My QR code">
+                <QrCode className="h-3.5 w-3.5" />
+              </Link>
+            </div>
           </div>
           <div className="mt-3 flex items-center gap-3">
             <p className="text-4xl font-bold tracking-tight">
@@ -69,7 +81,10 @@ export default function Home() {
             </button>
           </div>
 
-          <div className="mt-6 grid grid-cols-3 gap-3">
+          <div className="mt-6 grid grid-cols-4 gap-2 sm:gap-3">
+            <Link to="/scan" className="flex flex-col items-center gap-1 rounded-xl bg-white/10 py-3 text-sm font-medium hover:bg-white/20">
+              <ScanLine className="h-5 w-5" /> Scan
+            </Link>
             <Link to="/send" className="flex flex-col items-center gap-1 rounded-xl bg-white/10 py-3 text-sm font-medium hover:bg-white/20">
               <Send className="h-5 w-5" /> Send
             </Link>
@@ -102,6 +117,17 @@ export default function Home() {
           <span>Set a PayLite PIN to start sending money.</span>
           <Link to="/settings" className="font-semibold underline">Set PIN</Link>
         </div>
+      )}
+
+      {alerts.length > 0 && (
+        <Link to="/insights" className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            {alerts
+              .map((a) => `${CATEGORY_ICONS[a.category] ?? ''} ${a.category} ${a.status === 'exceeded' ? 'is over budget' : `at ${a.percentUsed}% of budget`}`)
+              .join(' · ')}
+          </span>
+        </Link>
       )}
 
       {incoming.length > 0 && (
