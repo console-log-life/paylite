@@ -1,16 +1,18 @@
 # PayLite
 
-A small UPI-style wallet: sign up, get a PayLite ID (`name@paylite`), add money, send money with a PIN, request money, and download statements.
+A small UPI-style wallet: sign up, get a PayLite ID (`name@paylite`), add money through Razorpay, pay by ID or QR code with a PIN, request money, and see where your money goes, with every payment automatically filed as an expense.
 
 The point of the project is the backend: how a payments system makes sure money is never lost, created, or sent twice, even when requests are retried or arrive at the same moment.
 
-**Stack:** Node.js, Express, MongoDB (Mongoose, multi-document transactions), React 18, TypeScript, Vite, Tailwind CSS
+**Stack:** Node.js, Express, MongoDB (Mongoose, multi-document transactions, aggregation), Razorpay, React 18, TypeScript, Vite, Tailwind CSS, Recharts
 **Tests:** Node.js test runner, Supertest, mongodb-memory-server (in-memory replica set)
 
 ## Features
 
 - Sign up and log in (bcrypt passwords, JWT sessions); every user gets a PayLite ID
-- Add money (simulated bank top-up) and send money to a PayLite ID, confirmed with a 4-6 digit PIN
+- Add money through **Razorpay Checkout** (test mode: UPI, cards, netbanking), with server-side signature verification and a webhook backup
+- Send money to a PayLite ID or by **scanning a QR code**, confirmed with a 4-6 digit PIN; every user has a QR (optionally with a fixed amount)
+- **Spending insights**: each payment gets a category (guessed from the note or from past payments to the same person), monthly spending by category, 6-month trend, top payees, and category budgets with alerts at 80% and over 100%
 - Payee name shown before paying, so a typo in an ID does not pay a stranger
 - Collect requests: ask someone for money; they pay with their PIN or decline; you can cancel; requests expire after 7 days
 - History with cursor pagination and sent/received filters; CSV statement for any date range
@@ -71,7 +73,21 @@ The frontend re-sends the same key automatically if the network drops (`client/s
 
 Paying a collect request flips its status from `pending` to `paid` with a conditional update inside the payment transaction. If the payer taps "Pay" on two devices at once, one payment goes through and the other gets `409`.
 
-### 7. Limits that hold under concurrency
+### 7. Razorpay top-ups are credited exactly once
+
+"Add money" never trusts the browser:
+
+1. The server creates the Razorpay order and decides the amount (`POST /api/wallet/topup/order`).
+2. After checkout, the browser sends back `order_id`, `payment_id` and `signature`. The server recomputes `HMAC-SHA256(order_id|payment_id, key_secret)` and compares it in constant time. Only Razorpay and the server know the secret, so a forged confirmation fails.
+3. Razorpay also calls `POST /api/webhooks/razorpay` server-to-server, signed over the raw request body. This credits the wallet even if the user closed the tab right after paying.
+
+Both paths call one function that flips the order from `created` to `paid` with a conditional update inside the same transaction as the ledger credit, and checks the paid amount matches the order. Browser and webhook can arrive together or Razorpay can retry the webhook, and the wallet is still credited once.
+
+### 8. Spending insights come from the ledger
+
+Every ledger entry carries a category label and the other party's account. The Insights page is a set of MongoDB aggregation pipelines over the user's ledger entries ($match on account and IST month, $group by category, by month with `$dateToString` in `Asia/Kolkata`, and by payee). Top-ups are the user's own money moving in, so they are not counted as income. The category is a label only: re-labelling a payment never touches its amount or balance.
+
+### 9. Limits that hold under concurrency
 
 The daily limit is a per-day counter document incremented inside the payment transaction. Two payments racing to the limit both write that one document, so MongoDB serialises them, and the one that would cross the limit rolls back.
 
@@ -86,10 +102,18 @@ All routes except register, login and health need `Authorization: Bearer <token>
 | GET | `/api/auth/me` | |
 | PUT | `/api/auth/pin` | pin, password |
 | GET | `/api/wallet` | balance and limits |
-| POST | `/api/wallet/topup` | amount · **Idempotency-Key** |
+| POST | `/api/wallet/topup` | demo top-up (only without Razorpay) · **Idempotency-Key** |
 | GET | `/api/wallet/verify` | cached balance vs ledger sum |
+| POST | `/api/wallet/topup/order` | amount → Razorpay order |
+| POST | `/api/wallet/topup/verify` | orderId, paymentId, signature |
+| POST | `/api/webhooks/razorpay` | Razorpay → server, signed raw body |
+| GET | `/api/transfers/suggest-category?to=&note=` | category suggestion |
+| PATCH | `/api/transactions/:entryId/category` | re-label a payment |
+| GET | `/api/insights?month=YYYY-MM` | spending report |
+| PUT | `/api/insights/budgets` | category, month, amount (upsert) |
+| DELETE | `/api/insights/budgets/:id` | |
 | GET | `/api/transfers/lookup?to=` | payee name for an ID |
-| POST | `/api/transfers` | to, amount, note, pin · **Idempotency-Key** |
+| POST | `/api/transfers` | to, amount, note, pin, category? · **Idempotency-Key** |
 | GET | `/api/requests?box=incoming\|outgoing` | |
 | POST | `/api/requests` | from, amount, note |
 | POST | `/api/requests/:id/pay` | pin · **Idempotency-Key** |
@@ -106,7 +130,7 @@ npm test         # unit tests + API tests on an in-memory MongoDB replica set
 npm run test:unit
 ```
 
-The API tests cover: exact paise transfers, overdraft and self-payment, 10 concurrent payments, idempotent retries (sequential and simultaneous), key reuse, failed-payment key release, PIN lockout, per-payment/daily/velocity limits, collect requests paid from two devices at once, cursor pagination, CSV statements (including spreadsheet-formula injection), and a full ledger reconciliation after all of it. GitHub Actions runs them on every push.
+The API tests cover: exact paise transfers, overdraft and self-payment, 10 concurrent payments, idempotent retries (sequential and simultaneous), key reuse, failed-payment key release, PIN lockout, per-payment/daily/velocity limits, collect requests paid from two devices at once, cursor pagination, CSV statements (including spreadsheet-formula injection), category suggestions and re-labelling, the insights report and budgets, Razorpay order creation (mocked), forged and real checkout signatures, webhook signatures, webhook retries, browser and webhook confirming the same payment at once, a wrong paid amount, and a full ledger reconciliation after all of it. GitHub Actions runs them on every push.
 
 ## Run locally
 
@@ -129,7 +153,8 @@ npm run dev             # http://localhost:5173
 ## Deploy
 
 - **Database:** MongoDB Atlas (free M0). Allow network access from anywhere so Render can connect.
-- **API:** Render web service, root directory `server`, build `npm install`, start `npm start`. Env: `MONGODB_URI`, `JWT_SECRET`, `CORS_ORIGINS` (the frontend URL), `NODE_VERSION=22`.
+- **API:** Render web service, root directory `server`, build `npm install`, start `npm start`. Env: `MONGODB_URI`, `JWT_SECRET`, `CORS_ORIGINS` (the frontend URL), `NODE_VERSION=22`, and for Razorpay `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`.
+- **Razorpay (test mode):** Dashboard → Webhooks → add `https://<api>/api/webhooks/razorpay` with event `payment.captured` and a secret; put the same secret in `RAZORPAY_WEBHOOK_SECRET`. Test with UPI ID `success@razorpay` or card `4111 1111 1111 1111`.
 - **Web app:** Vercel, root directory `client`. Env: `VITE_API_URL` (the Render URL). `vercel.json` sends every path to `index.html` so routes work on refresh.
 
 ## Project structure
@@ -137,16 +162,23 @@ npm run dev             # http://localhost:5173
 ```
 server/
   src/lib/          money (paise), limits, validation, errors
-  src/models/       User, Account, Transaction, LedgerEntry, IdempotencyKey, PaymentRequest, DailyUsage
-  src/services/     ledger (moveMoney), payments, pin, reconcile, db (transactions)
+  src/models/       User, Account, Transaction, LedgerEntry, IdempotencyKey, PaymentRequest,
+                    DailyUsage, TopupOrder, Budget
+  src/services/     ledger (moveMoney), payments, pin, razorpay, categorize, insights,
+                    reconcile, db (transactions)
   src/middleware/   auth, idempotency, rate limits, errors
-  src/routes/       auth, wallet, transfers, requests, transactions
+  src/routes/       auth, wallet, transfers, requests, transactions, insights, webhooks
   scripts/          reconcile.js
   tests/            unit and API tests
 client/
   src/lib/api.ts    fetch wrapper, idempotency keys, automatic safe retries
-  src/pages/        Home, Send, Request, Requests, Add money, History, Settings
+  src/lib/qr.ts     PayLite QR format (paylite://pay?pa=...&am=...)
+  src/lib/razorpay.ts  loads Razorpay Checkout on demand
+  src/pages/        Home, Send, Scan & Pay, My QR, Insights, Request, Requests,
+                    Add money, History, Settings
   src/components/   PIN sheet, receipt, activity list, layout
 ```
 
-PayLite is a demo. No real money moves, and "Add money" is simulated.
+PayLite is a demo. No real money moves: Razorpay runs in test mode, and without Razorpay keys "Add money" is simulated.
+
+PayLite is not a UPI app. Real UPI needs a licensed bank or payment service provider; PayLite's QR codes use their own `paylite://` scheme so real UPI apps do not try to pay them.
