@@ -26,6 +26,8 @@ export async function moveMoney(session, {
   initiatedBy,
   paymentRequestId = null,
   allowNegative = false, // only for the system bank account
+  fromCategory = null, // label for the payer's entry, e.g. "Food & Dining"
+  toCategory = null, // label for the payee's entry, e.g. "Income"
 }) {
   if (!Number.isInteger(amountPaise) || amountPaise <= 0) {
     throw new Error('moveMoney needs a positive integer amount');
@@ -62,8 +64,22 @@ export async function moveMoney(session, {
   // The two entries add up to zero: -amount + amount.
   await LedgerEntry.insertMany(
     [
-      { transactionId: transaction._id, accountId: fromAccountId, amountPaise: -amountPaise, balanceAfterPaise: from.balancePaise },
-      { transactionId: transaction._id, accountId: toAccountId, amountPaise, balanceAfterPaise: to.balancePaise },
+      {
+        transactionId: transaction._id,
+        accountId: fromAccountId,
+        amountPaise: -amountPaise,
+        balanceAfterPaise: from.balancePaise,
+        counterpartyAccountId: toAccountId,
+        category: fromCategory,
+      },
+      {
+        transactionId: transaction._id,
+        accountId: toAccountId,
+        amountPaise,
+        balanceAfterPaise: to.balancePaise,
+        counterpartyAccountId: fromAccountId,
+        category: toCategory,
+      },
     ],
     { session },
   );

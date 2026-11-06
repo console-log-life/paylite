@@ -97,6 +97,7 @@ router.post(
       userId: req.userId,
       requestId: req.params.id,
       pin,
+      category: req.body?.category,
       idempotency: req.idempotency,
     });
     res.status(201).json(result);

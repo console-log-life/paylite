@@ -1,9 +1,9 @@
 import { User } from '../models/User.js';
-import { Account } from '../models/Account.js';
 import { Transaction } from '../models/Transaction.js';
 import { DailyUsage } from '../models/DailyUsage.js';
 import { PaymentRequest } from '../models/PaymentRequest.js';
 import { IdempotencyKey } from '../models/IdempotencyKey.js';
+import { TopupOrder } from '../models/TopupOrder.js';
 import { AppError, notFound } from '../lib/errors.js';
 import { LIMITS, istDayKey } from '../lib/limits.js';
 import { paiseToRupees } from '../lib/money.js';
@@ -11,6 +11,8 @@ import { inTransaction } from './db.js';
 import { moveMoney } from './ledger.js';
 import { getSystemBank, getUserAccount } from './accounts.js';
 import { verifyPin } from './pin.js';
+import { resolveCategory } from './categorize.js';
+import { INCOME, TOPUP } from '../lib/categories.js';
 
 // Saves the response for this request's Idempotency-Key in the SAME database
 // transaction as the payment. So either the money moved and the response is
@@ -24,7 +26,7 @@ async function completeIdempotency(session, idempotency, status, body) {
   );
 }
 
-function receipt(transaction, { balancePaise, counterparty, direction }) {
+function receipt(transaction, { balancePaise, counterparty, direction, category }) {
   return {
     transaction: {
       id: transaction._id.toString(),
@@ -35,6 +37,7 @@ function receipt(transaction, { balancePaise, counterparty, direction }) {
       note: transaction.note,
       createdAt: transaction.createdAt.toISOString(),
       counterparty,
+      category: category ?? null,
     },
     balancePaise,
   };
@@ -82,7 +85,7 @@ async function addDailyUsage(session, accountId, amountPaise) {
   }
 }
 
-export async function transfer({ userId, toHandle, amountPaise, note, pin, idempotency }) {
+export async function transfer({ userId, toHandle, amountPaise, note, pin, category, idempotency }) {
   const payee = await User.findOne({ handle: toHandle });
   if (!payee) throw notFound('No PayLite user with this ID');
   if (payee._id.equals(userId)) throw new AppError(400, 'SAME_ACCOUNT', 'You cannot send money to yourself');
@@ -91,6 +94,12 @@ export async function transfer({ userId, toHandle, amountPaise, note, pin, idemp
 
   const fromAccount = await getUserAccount(userId);
   const toAccount = await getUserAccount(payee._id);
+  const fromCategory = await resolveCategory({
+    chosen: category,
+    accountId: fromAccount._id,
+    payeeAccountId: toAccount._id,
+    note,
+  });
 
   return inTransaction(async (session) => {
     await addDailyUsage(session, fromAccount._id, amountPaise);
@@ -101,44 +110,93 @@ export async function transfer({ userId, toHandle, amountPaise, note, pin, idemp
       amountPaise,
       note,
       initiatedBy: userId,
+      fromCategory,
+      toCategory: INCOME,
     });
     const body = receipt(result.transaction, {
       balancePaise: result.fromBalancePaise,
       counterparty: { name: payee.name, handle: payee.handle },
       direction: 'sent',
+      category: fromCategory,
     });
     await completeIdempotency(session, idempotency, 201, body);
     return body;
   });
 }
 
-// "Add money": in a real app this happens after the bank or card network
-// confirms the payment. Here it is simulated by moving money out of the
-// SYSTEM_BANK account, which is allowed to go negative.
-export async function topup({ userId, amountPaise, idempotency }) {
+export function checkTopupAmount(amountPaise) {
   if (amountPaise > LIMITS.maxTopupPaise) {
     throw new AppError(422, 'LIMIT_TOPUP', `The most you can add at once is ₹${paiseToRupees(LIMITS.maxTopupPaise)}`);
   }
-  const bank = await getSystemBank();
-  const account = await getUserAccount(userId);
+}
 
+// Moves money from SYSTEM_BANK (the outside world, allowed to go negative)
+// into the user's wallet. Must run inside a transaction.
+async function creditWallet(session, { userId, amountPaise, note }) {
+  const bank = await getSystemBank(session);
+  const account = await getUserAccount(userId, session);
+  const result = await moveMoney(session, {
+    type: 'topup',
+    fromAccountId: bank._id,
+    toAccountId: account._id,
+    amountPaise,
+    note,
+    initiatedBy: userId,
+    allowNegative: true,
+    toCategory: TOPUP,
+  });
+  return receipt(result.transaction, {
+    balancePaise: result.toBalancePaise,
+    counterparty: { name: 'Bank account', handle: null },
+    direction: 'received',
+    category: TOPUP,
+  });
+}
+
+// Demo "add money" with no payment gateway: the money appears immediately.
+// Used when Razorpay is not configured (local development and tests).
+export async function demoTopup({ userId, amountPaise, idempotency }) {
+  checkTopupAmount(amountPaise);
   return inTransaction(async (session) => {
-    const result = await moveMoney(session, {
-      type: 'topup',
-      fromAccountId: bank._id,
-      toAccountId: account._id,
-      amountPaise,
-      note: 'Added from bank',
-      initiatedBy: userId,
-      allowNegative: true,
-    });
-    const body = receipt(result.transaction, {
-      balancePaise: result.toBalancePaise,
-      counterparty: { name: 'Bank account', handle: null },
-      direction: 'received',
-    });
+    const body = await creditWallet(session, { userId, amountPaise, note: 'Added from bank (demo)' });
     await completeIdempotency(session, idempotency, 201, body);
     return body;
+  });
+}
+
+// Credits a Razorpay top-up once the payment is proven (checkout signature or
+// webhook). Both can arrive for the same payment, possibly at the same time.
+// The order is flipped from "created" to "paid" inside the same transaction
+// as the credit, and only while it is still "created", so the wallet is
+// credited exactly once no matter how many confirmations arrive.
+export async function creditTopupOrder({ orderId, paymentId, amountPaise }) {
+  return inTransaction(async (session) => {
+    const order = await TopupOrder.findOneAndUpdate(
+      { orderId, status: 'created' },
+      { $set: { status: 'paid', paymentId } },
+      { new: true, session },
+    );
+
+    if (!order) {
+      // Already credited (or unknown): return the existing result.
+      const existing = await TopupOrder.findOne({ orderId }).session(session);
+      if (!existing) throw notFound('Top-up order not found');
+      return { alreadyCredited: true, order: existing };
+    }
+
+    if (amountPaise !== undefined && amountPaise !== order.amountPaise) {
+      // The gateway says a different amount was paid. Do not credit; throwing
+      // rolls back the status change so it can be looked at.
+      throw new AppError(409, 'AMOUNT_MISMATCH', 'Paid amount does not match the order');
+    }
+
+    const body = await creditWallet(session, {
+      userId: order.userId,
+      amountPaise: order.amountPaise,
+      note: 'Added via Razorpay',
+    });
+    await TopupOrder.updateOne({ _id: order._id }, { $set: { transactionId: body.transaction.id } }, { session });
+    return { alreadyCredited: false, order, receipt: body };
   });
 }
 
@@ -146,7 +204,7 @@ export async function topup({ userId, amountPaise, idempotency }) {
 // same transaction as the money movement, and only matches while the request
 // is still pending, so a request can be paid at most once even if the payer
 // taps "Pay" twice on two devices.
-export async function payRequest({ userId, requestId, pin, idempotency }) {
+export async function payRequest({ userId, requestId, pin, category, idempotency }) {
   const request = await PaymentRequest.findOne({ _id: requestId, payerId: userId });
   if (!request) throw notFound('Payment request not found');
   if (request.status !== 'pending') {
@@ -159,6 +217,12 @@ export async function payRequest({ userId, requestId, pin, idempotency }) {
   const requester = await User.findById(request.requesterId);
   const fromAccount = await getUserAccount(userId);
   const toAccount = await getUserAccount(request.requesterId);
+  const fromCategory = await resolveCategory({
+    chosen: category,
+    accountId: fromAccount._id,
+    payeeAccountId: toAccount._id,
+    note: request.note,
+  });
 
   return inTransaction(async (session) => {
     const claimed = await PaymentRequest.findOneAndUpdate(
@@ -177,6 +241,8 @@ export async function payRequest({ userId, requestId, pin, idempotency }) {
       note: request.note,
       initiatedBy: userId,
       paymentRequestId: request._id,
+      fromCategory,
+      toCategory: INCOME,
     });
     await PaymentRequest.updateOne({ _id: request._id }, { $set: { transactionId: result.transaction._id } }, { session });
 
@@ -184,13 +250,9 @@ export async function payRequest({ userId, requestId, pin, idempotency }) {
       balancePaise: result.fromBalancePaise,
       counterparty: { name: requester.name, handle: requester.handle },
       direction: 'sent',
+      category: fromCategory,
     });
     await completeIdempotency(session, idempotency, 201, body);
     return body;
   });
-}
-
-export async function getBalance(userId) {
-  const account = await Account.findOne({ kind: 'user', userId });
-  return account ? account.balancePaise : 0;
 }

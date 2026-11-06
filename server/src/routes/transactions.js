@@ -1,13 +1,14 @@
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import { asyncHandler } from '../middleware/errors.js';
-import { badRequest } from '../lib/errors.js';
+import { badRequest, notFound } from '../lib/errors.js';
 import { paiseToRupees } from '../lib/money.js';
 import { LedgerEntry } from '../models/LedgerEntry.js';
 import { Transaction } from '../models/Transaction.js';
 import { Account } from '../models/Account.js';
 import { User } from '../models/User.js';
 import { getUserAccount } from '../services/accounts.js';
+import { isExpenseCategory } from '../lib/categories.js';
 
 const router = Router();
 
@@ -36,6 +37,7 @@ async function toHistory(entries, myAccountId) {
       amountPaise: Math.abs(e.amountPaise),
       balanceAfterPaise: e.balanceAfterPaise,
       note: t.note,
+      category: e.category,
       createdAt: e.createdAt.toISOString(),
       counterparty: other ? { name: other.name, handle: other.handle } : { name: 'Bank account', handle: null },
     };
@@ -78,6 +80,26 @@ router.get(
   }),
 );
 
+// PATCH /api/transactions/:entryId/category { category }
+// Re-labels one of the user's own payments. Only the label changes; the
+// amount and balance in the ledger entry are never touched.
+router.patch(
+  '/:entryId/category',
+  asyncHandler(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.entryId)) throw notFound('Transaction not found');
+    const { category } = req.body || {};
+    if (!isExpenseCategory(category)) throw badRequest('Unknown category');
+    const account = await getUserAccount(req.userId);
+    const updated = await LedgerEntry.findOneAndUpdate(
+      { _id: req.params.entryId, accountId: account._id, amountPaise: { $lt: 0 } },
+      { $set: { category } },
+      { new: true },
+    );
+    if (!updated) throw notFound('Transaction not found');
+    res.json({ id: updated._id.toString(), category: updated.category });
+  }),
+);
+
 function csvCell(value) {
   const text = String(value ?? '');
   // Quote cells with commas/quotes, and neutralise leading = + - @ so a
@@ -106,7 +128,7 @@ router.get(
     const entries = await LedgerEntry.find({ accountId: account._id, createdAt: { $gte: start, $lt: end } }).sort({ _id: 1 });
     const rows = await toHistory(entries, account._id);
 
-    const header = ['Date (IST)', 'Reference', 'Type', 'Counterparty', 'PayLite ID', 'Note', 'Debit (INR)', 'Credit (INR)', 'Balance (INR)'];
+    const header = ['Date (IST)', 'Reference', 'Type', 'Category', 'Counterparty', 'PayLite ID', 'Note', 'Debit (INR)', 'Credit (INR)', 'Balance (INR)'];
     const lines = [header.join(',')];
     for (const r of rows) {
       const when = new Date(r.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
@@ -115,6 +137,7 @@ router.get(
           when,
           r.reference,
           r.type,
+          r.category ?? '',
           r.counterparty.name,
           r.counterparty.handle ?? '',
           r.note,

@@ -4,6 +4,12 @@ import mongoose from 'mongoose';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 
 process.env.JWT_SECRET = 'api-test-secret';
+// Razorpay test credentials (no real calls are made: order creation is
+// mocked in the tests). Demo top-ups stay on so tests can fund wallets.
+process.env.RAZORPAY_KEY_ID = 'rzp_test_dummy';
+process.env.RAZORPAY_KEY_SECRET = 'test_key_secret';
+process.env.RAZORPAY_WEBHOOK_SECRET = 'test_webhook_secret';
+process.env.ALLOW_DEMO_TOPUP = 'true';
 const { createApp } = await import('../../src/app.js');
 const { ensureSystemAccounts } = await import('../../src/services/accounts.js');
 
@@ -51,12 +57,12 @@ export async function makeUser({ topupRupees = 0, name } = {}) {
   return { auth, user: reg.body.user, handle: reg.body.user.handle };
 }
 
-export function send(from, toHandle, amount, { pin = '1234', key = newKey(), note } = {}) {
+export function send(from, toHandle, amount, { pin = '1234', key = newKey(), note, category } = {}) {
   return request(app)
     .post('/api/transfers')
     .set(from.auth)
     .set('Idempotency-Key', key)
-    .send({ to: toHandle, amount: String(amount), pin, note });
+    .send({ to: toHandle, amount: String(amount), pin, note, category });
 }
 
 export async function balanceOf(user) {

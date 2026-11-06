@@ -6,6 +6,8 @@ import { readAmount, readHandle, readNote, readPin } from '../lib/validate.js';
 import { notFound } from '../lib/errors.js';
 import { User } from '../models/User.js';
 import { transfer } from '../services/payments.js';
+import { getUserAccount } from '../services/accounts.js';
+import { suggestCategory } from '../services/categorize.js';
 
 const router = Router();
 
@@ -23,7 +25,22 @@ router.get(
   }),
 );
 
-// POST /api/transfers { to, amount, note, pin }   (needs Idempotency-Key)
+// GET /api/transfers/suggest-category?to=ravi@paylite&note=swiggy
+// Pre-fills the category on the send screen (see services/categorize.js).
+router.get(
+  '/suggest-category',
+  asyncHandler(async (req, res) => {
+    const account = await getUserAccount(req.userId);
+    let payeeAccountId = null;
+    if (req.query.to) {
+      const payee = await User.findOne({ handle: readHandle(req.query.to) }, { _id: 1 });
+      if (payee) payeeAccountId = (await getUserAccount(payee._id))._id;
+    }
+    res.json(await suggestCategory({ accountId: account._id, payeeAccountId, note: String(req.query.note || '') }));
+  }),
+);
+
+// POST /api/transfers { to, amount, note, pin, category? }   (needs Idempotency-Key)
 router.post(
   '/',
   idempotent(),
@@ -38,6 +55,7 @@ router.post(
       amountPaise,
       note,
       pin,
+      category: req.body?.category,
       idempotency: req.idempotency,
     });
     res.status(201).json(result);
