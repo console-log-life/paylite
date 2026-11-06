@@ -1,11 +1,58 @@
 # PayLite
 
+[![CI](https://github.com/console-log-life/paylite/actions/workflows/ci.yml/badge.svg)](https://github.com/console-log-life/paylite/actions/workflows/ci.yml)
+
+**Live demo:** https://paylite-drab.vercel.app (the API runs on Render's free tier, so the first request after a while can take 30–50 seconds)
+
 A small UPI-style wallet: sign up, get a PayLite ID (`name@paylite`), add money through Razorpay, pay by ID or QR code with a PIN, request money, and see where your money goes, with every payment automatically filed as an expense.
 
 The point of the project is the backend: how a payments system makes sure money is never lost, created, or sent twice, even when requests are retried or arrive at the same moment.
 
 **Stack:** Node.js, Express, MongoDB (Mongoose, multi-document transactions, aggregation), Razorpay, React 18, TypeScript, Vite, Tailwind CSS, Recharts
 **Tests:** Node.js test runner, Supertest, mongodb-memory-server (in-memory replica set)
+
+## Try it in two minutes
+
+1. Open the live demo, create an account, and set a PIN in **Settings**.
+2. **Add money**: Razorpay test checkout opens. Pay with UPI ID `success@razorpay` or card `4111 1111 1111 1111` (any future expiry, any CVV). No real money is charged.
+3. Open a second account in an incognito window. From the first account, show **My QR**; from the second, use **Scan & Pay** (camera or upload the QR image) and enter the PIN.
+4. Open **Insights** to see the payment filed under a category, and **History** to download a CSV statement.
+
+## Screenshots
+
+Screens shown with sample data.
+
+| Home | Insights |
+| --- | --- |
+| ![Home](docs/screenshots/home.png) | ![Insights](docs/screenshots/insights.png) |
+
+| Send with category | PIN, wrong attempt | Receipt |
+| --- | --- | --- |
+| ![Send](docs/screenshots/send.png) | ![PIN](docs/screenshots/pin.png) | ![Receipt](docs/screenshots/receipt.png) |
+
+| My QR | Mobile |
+| --- | --- |
+| ![My QR](docs/screenshots/qr.png) | ![Mobile](docs/screenshots/mobile.png) |
+
+## How a payment flows
+
+```mermaid
+sequenceDiagram
+    participant App as Web app
+    participant API as Express API
+    participant DB as MongoDB (one transaction)
+    App->>API: POST /api/transfers + Idempotency-Key + PIN
+    API->>API: key seen before? replay saved response
+    API->>API: check PIN, per-payment and velocity limits
+    API->>DB: start transaction
+    DB->>DB: daily usage += amount (abort if over limit)
+    DB->>DB: debit payer only if balance >= amount
+    DB->>DB: credit payee
+    DB->>DB: write Transaction + 2 ledger entries (sum = 0)
+    DB->>DB: save response under Idempotency-Key
+    DB-->>API: commit (all or nothing)
+    API-->>App: 201 receipt
+```
 
 ## Features
 
@@ -155,7 +202,7 @@ npm run dev             # http://localhost:5173
 - **Database:** MongoDB Atlas (free M0). Allow network access from anywhere so Render can connect.
 - **API:** Render web service, root directory `server`, build `npm install`, start `npm start`. Env: `MONGODB_URI`, `JWT_SECRET`, `CORS_ORIGINS` (the frontend URL), `NODE_VERSION=22`, and for Razorpay `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`.
 - **Razorpay (test mode):** Dashboard → Webhooks → add `https://<api>/api/webhooks/razorpay` with event `payment.captured` and a secret; put the same secret in `RAZORPAY_WEBHOOK_SECRET`. Test with UPI ID `success@razorpay` or card `4111 1111 1111 1111`.
-- **Web app:** Vercel, root directory `client`. Env: `VITE_API_URL` (the Render URL). `vercel.json` sends every path to `index.html` so routes work on refresh.
+- **Web app:** Vercel, root directory `client`. The API URL comes from `client/.env.production` (a `VITE_API_URL` set in Vercel overrides it). `vercel.json` sends every path to `index.html` so routes work on refresh.
 
 ## Project structure
 
